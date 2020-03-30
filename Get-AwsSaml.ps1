@@ -59,8 +59,7 @@ if (!$force) {
         Get-S3Bucket -ProfileName $ProfileName | Out-Null
         Write-Verbose "Valid credential are still available. No need to refresh. Use -Force to force resfresh"
         exit
-    }
-    catch {
+    } catch {
         Write-Verbose "Credentials expired, processing to refresh"
     }
 }
@@ -91,9 +90,9 @@ if ($ParameterSetName -eq 's1') {
         $Credential = [System.Management.Automation.PSCredential]::new($UserName, $PasswordSecured)
     }
 } elseif ($ParameterSetName -eq 's2') {
-        $UserName = $Credential.UserName
-        $PasswordSecured = $Credential.Password
-        $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
+    $UserName = $Credential.UserName
+    $PasswordSecured = $Credential.Password
+    $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
 }
 Write-Verbose "Using username: $($Username)"
 $WebRequestParams.Add('Body',@{UserName=$UserName;Password=$Password})
@@ -141,8 +140,7 @@ if (![string]::IsNullOrEmpty($RoleArn)) {
 
 if ((-not $RoleSelected) -and ($AwsRoles.Count -gt 1)) {
     Write-Output "Available roles you could assume:"
-    for ($i = 0; $i -lt $AwsRoles.Count; $i++)
-    {
+    for ($i = 0; $i -lt $AwsRoles.Count; $i++) {
         Write-Output ("[{0}] - {1}" -f $i, $AwsRoles[$i].split(',')[1])
     }
     $SelectedRoleIndex = (Read-Host -Prompt 'Selection')
