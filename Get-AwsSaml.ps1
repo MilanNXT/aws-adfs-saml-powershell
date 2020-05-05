@@ -4,10 +4,13 @@ Param(
     [string]$RoleArn = '',
     [string]$ProfileName = "saml",
     [string]$ProfileLocation = "$($HOME)\.aws\credentials",
-    [string]$IdpEndpoint = 'https://sts.contoso.com/adfs/ls/IdpInitiatedSignOn.aspx?loginToRp=urn:amazon:webservices',
+    [string]$IdpEndpoint = 'https://sts.contoso.co.za/adfs/ls/IdpInitiatedSignOn.aspx?loginToRp=urn:amazon:webservices',
+    [int]$SessionDuration = 28800,
     [switch]$Force = $false,
     [switch]$SetEnvVar = $false,
     [switch]$SetSharedCred = $true,
+    [switch]$StoreAsDefaultProfile = $False,
+    [switch]$CheckAndInstallModules = $False,
     [Parameter (ParameterSetName = 's1', Mandatory = $false)][string]$UserName = '',
     [Parameter (ParameterSetName = 's1', Mandatory = $false)][string]$Password = '',
     [Parameter (ParameterSetName = 's2', Mandatory = $false)][System.Management.Automation.PSCredential]$Credential
@@ -15,51 +18,63 @@ Param(
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
-Write-Verbose "Selected profile: [$ProfileName]"
-Write-Verbose "Selected profile location: [$ProfileLocation]"
+Write-Verbose "Using following paramter values"
+Write-Verbose ">> ProfileName: [$ProfileName]"
+Write-Verbose ">> ProfileLocation: [$ProfileLocation]"
+Write-Verbose ">> IdpEndpoint: [$IdpEndpoint]"
+Write-Verbose ">> SessionDuration: [$SessionDuration]"
+Write-Verbose ">> Force SAML token refresh: [$Force]"
+Write-Verbose ">> Set Enviroment Variables: [$SetEnvVar]"
+Write-Verbose ">> Set Shared Credentials: [$SetSharedCred]"
+Write-Verbose ">> Store as Default profile: [$StoreAsDefaultProfile]"
+Write-Verbose ">> Check and Install modules prerequisite: [$CheckAndInstallModules]"
 if (![string]::IsNullOrEmpty($RoleArn)) {
     Write-Verbose "Pre-Selected role: [$RoleArn]"
 }
 
-#check Nuget
-if ([string]::isnullorempty((Get-PackageProvider -ListAvailable -verbose:$false | select Name, Version | where {($_.Name -eq 'NuGet') -and ($_.Version -eq '2.8.5.208')}))) {
-    Write-Verbose -Message "Installing NuGet 2.8.5.208"
-    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.208 -Force -verbose:$false| Out-Null
-    Import-PackageProvider -Name 'NuGet' -Force -verbose:$false | Out-Null
-} else {
-    Write-Verbose -Message "NuGet 2.8.5.208 allready installed..."
-}
-
-# check PSGallery
-$psgall = Get-PackageSource -Name 'PSGallery' -verbose:$false -ErrorAction SilentlyContinue
-if ([string]::isnullorempty($psGall) -or ($psgall.ProviderName -ne 'PowerShellGet') -or (!$psgall.IsRegistered) -or (!$psgall.IsTrusted)) {
-    Write-Verbose -Message "Registering PSGallery ..."
-    if (![string]::isnullorempty($psgall)) {
-        $psgall = Register-PackageSource -Name 'PSGallery' -ProviderName 'PowerShellGet' -Force -Trusted -verbose:$false -ErrorAction SilentlyContinue | Out-Null
+if ($CheckAndInstallModules) {
+    #check Nuget
+    if ([string]::isnullorempty((Get-PackageProvider -ListAvailable -verbose:$false | select Name, Version | where {($_.Name -eq 'NuGet') -and ($_.Version -eq '2.8.5.208')}))) {
+        Write-Verbose -Message "Installing NuGet 2.8.5.208"
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.208 -Force -verbose:$false| Out-Null
+        Import-PackageProvider -Name 'NuGet' -Force -verbose:$false | Out-Null
     } else {
-        $psgall = Register-PackageSource -Name 'PSGallery' -Location 'https://www.powershellgallery.com/api/v2/' -ProviderName 'PowerShellGet' -verbose:$false -ErrorAction SilentlyContinue -Force
+        Write-Verbose -Message "NuGet 2.8.5.208 allready installed..."
     }
-    if (!$psgall.IsTrusted) {
-        Set-PSRepository -Name 'PSGallery' -InstallationPolicy 'Trusted' -ErrorAction SilentlyContinue -verbose:$false | Out-Null
-        Set-PackageSource -Name 'PSGallery' -Trusted -Force -ErrorAction SilentlyContinue -verbose:$false | Out-Null
+
+    # check PSGallery
+    $psgall = Get-PackageSource -Name 'PSGallery' -verbose:$false -ErrorAction SilentlyContinue
+    if ([string]::isnullorempty($psGall) -or ($psgall.ProviderName -ne 'PowerShellGet') -or (!$psgall.IsRegistered) -or (!$psgall.IsTrusted)) {
+        Write-Verbose -Message "Registering PSGallery ..."
+        if (![string]::isnullorempty($psgall)) {
+            $psgall = Register-PackageSource -Name 'PSGallery' -ProviderName 'PowerShellGet' -Force -Trusted -verbose:$false -ErrorAction SilentlyContinue | Out-Null
+        } else {
+            $psgall = Register-PackageSource -Name 'PSGallery' -Location 'https://www.powershellgallery.com/api/v2/' -ProviderName 'PowerShellGet' -verbose:$false -ErrorAction SilentlyContinue -Force
+        }
+        if (!$psgall.IsTrusted) {
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy 'Trusted' -ErrorAction SilentlyContinue -verbose:$false | Out-Null
+            Set-PackageSource -Name 'PSGallery' -Trusted -Force -ErrorAction SilentlyContinue -verbose:$false | Out-Null
+        }
+    } else {
+        Write-Verbose -Message "PSGallery allready registered ..."
     }
-} else {
-    Write-Verbose -Message "PSGallery allready registered ..."
-}
 
-if(-Not (Get-Module AWSPowershell -ListAvailable -verbose:$false)) {
-    Write-Verbose "AWSPowershell not found. Installing..."
-    Install-Module AWSPowershell -Scope CurrentUser -Force -verbose:$false | Out-Null
-}
+    if(-Not (Get-Module AWSPowershell -ListAvailable -verbose:$false)) {
+        Write-Verbose "AWSPowershell not found. Installing..."
+        Install-Module AWSPowershell -Scope CurrentUser -Force -verbose:$false | Out-Null
+    }
+} else { Write-Verbose -Message "Bypassing Nuget, Powershell and AWSPowershell prerequisite check..." }
 
-Import-Module AWSPowerShell -verbose:$false
+Write-Verbose -Message "Importing AWSPowershell comandlets..."
+Import-Module AWSPowerShell -Verbose:$false
 
 if (!$force) {
     try {
         Get-S3Bucket -ProfileName $ProfileName | Out-Null
         Write-Verbose "Valid credential are still available. No need to refresh. Use -Force to force resfresh"
         exit
-    } catch {
+    }
+    catch {
         Write-Verbose "Credentials expired, processing to refresh"
     }
 }
@@ -90,13 +105,13 @@ if ($ParameterSetName -eq 's1') {
         $Credential = [System.Management.Automation.PSCredential]::new($UserName, $PasswordSecured)
     }
 } elseif ($ParameterSetName -eq 's2') {
-    $UserName = $Credential.UserName
-    $PasswordSecured = $Credential.Password
-    $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
+        $UserName = $Credential.UserName
+        $PasswordSecured = $Credential.Password
+        $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
 }
 Write-Verbose "Using username: $($Username)"
 $WebRequestParams.Add('Body',@{UserName=$UserName;Password=$Password})
-$InitialResponse=Invoke-WebRequest @WebRequestParams -Credential $Credential
+$InitialResponse=Invoke-WebRequest @WebRequestParams -Credential $Credential -Verbose:$false
 $SAMLResponseEncoded=$InitialResponse.InputFields.FindByName('SAMLResponse').value
 
 if (!$SAMLResponseEncoded) {
@@ -111,11 +126,15 @@ if (!$SAMLResponseEncoded) {
 $AwsRoles=@()
 foreach ($att in $SAMLResponse.Response.Assertion.AttributeStatement.Attribute) {
     switch ($att.Name) {
-        'https://aws.amazon.com/SAML/Attributes/RoleSessionName' { $RoleSessionName = $att.AttributeValue }
-        'https://aws.amazon.com/SAML/Attributes/SessionDuration' { $SessionDuration = $att.AttributeValue }
+        'https://aws.amazon.com/SAML/Attributes/RoleSessionName' { $RoleSessionNameAtt = $att.AttributeValue }
+        'https://aws.amazon.com/SAML/Attributes/SessionDuration' { $SessionDurationAtt = $att.AttributeValue }
         'https://aws.amazon.com/SAML/Attributes/Role' { [string[]]$AwsRoles=$att.AttributeValue }
     }
 }
+
+Write-Verbose "Returned SAML assertion attributes:"
+Write-Verbose "SessionName: $RoleSessionNameAtt"
+Write-Verbose "SessionDuration: $SessionDurationAtt"
 
 if ([string]::IsNullOrEmpty($AwsRoles) -or ($AwsRoles.Count -le 0)) {
     Write-Verbose "No roles to assume has been returned, please try again..."
@@ -143,7 +162,8 @@ if ((-not $RoleSelected) -and ($AwsRoles.Count -gt 1)) {
     for ($i = 0; $i -lt $AwsRoles.Count; $i++) {
         Write-Output ("[{0}] - {1}" -f $i, $AwsRoles[$i].split(',')[1])
     }
-    $SelectedRoleIndex = (Read-Host -Prompt 'Selection')
+    $SelectedRoleIndex = (Read-Host -Prompt 'Selection [0]')
+    if ([string]::IsNullOrEmpty($SelectedRoleIndex)) { $SelectedRoleIndex = "0"}
     if (-not (($SelectedRoleIndex -match "^[\d\.]+$") -and ([int]$SelectedRoleIndex -in 0..$($AwsRoles.Count-1)))) {
         Write-Verbose "You selected an invalid role index, please try again..."
         if (!$VerbosePreference) { Write-Warning "Refresh failed, Use -Verbose parameter for more infomration" }
@@ -152,10 +172,12 @@ if ((-not $RoleSelected) -and ($AwsRoles.Count -gt 1)) {
 }
 $RoleArn = $AwsRoles[[int]$SelectedRoleIndex].split(',')[1]
 $PrincipalRole = $AwsRoles[[int]$SelectedRoleIndex].split(',')[0]
-Write-Verbose "Assuming role [$RoleArn]..."
+Write-Verbose ">> Principal role: [$PrincipalRole]"
+Write-Verbose ">> Assuming role [$RoleArn]..."
 
 try {
-    $AssumedRole = Use-STSRoleWithSAML -SAMLAssertion $SAMLResponseEncoded -PrincipalArn $PrincipalRole -RoleArn $RoleArn -DurationInSeconds 28800
+    if ($SessionDuration -gt 43200) {$SessionDuration=43200} # maximum alowed time 12 hours
+    $AssumedRole = Use-STSRoleWithSAML -SAMLAssertion $SAMLResponseEncoded -PrincipalArn $PrincipalRole -RoleArn $RoleArn -DurationInSeconds $SessionDuration -Verbose:$false
     #$CliResult = (&aws sts assume-role-with-saml --role-arn $RoleArn --principal-arn $PrincipalRole --saml-assertion $SAMLResponseEncoded --duration-seconds 28800) | Out-String
     #$AssumedRole = ConvertFrom-Json -InputObject $CliResult
 } catch {
@@ -169,7 +191,11 @@ try {
 if (![string]::IsNullOrEmpty($AssumedRole)) {
     if ($SetSharedCred) {
         Write-Verbose "Storing assumed credential to [$ProfileLocation] as profile [$ProfileName]..."
-        Set-AWSCredential -AccessKey $aws_AccessKeyId -SecretKey $aws_SecretAccessKey -SessionToken $aws_SessionToken -StoreAs $ProfileName -ProfileLocation $ProfileLocation
+        Set-AWSCredential -AccessKey $AssumedRole.Credentials.AccessKeyId -SecretKey $AssumedRole.Credentials.SecretAccessKey -SessionToken $AssumedRole.Credentials.SessionToken -StoreAs $ProfileName -ProfileLocation $ProfileLocation
+        if ($StoreAsDefaultProfile) {
+            Write-Verbose "Storing assumed credential to [$ProfileLocation] as Default profile..."
+            Set-AWSCredential -AccessKey $AssumedRole.Credentials.AccessKeyId -SecretKey $AssumedRole.Credentials.SecretAccessKey -SessionToken $AssumedRole.Credentials.SessionToken -StoreAs 'default' -ProfileLocation $ProfileLocation
+        }
     }
     if ($SetEnvVar) {
         Write-Verbose  "Storing assumed credential to User Environment Variables [AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN]..."
