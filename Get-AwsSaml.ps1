@@ -4,7 +4,7 @@ Param(
     [string]$RoleArn = '',
     [string]$ProfileName = "saml",
     [string]$ProfileLocation = "$($HOME)\.aws\credentials",
-    [string]$IdpEndpoint = 'https://sts.contoso.co.za/adfs/ls/IdpInitiatedSignOn.aspx?loginToRp=urn:amazon:webservices',
+    [string]$IdpEndpoint = 'https://sts.contoso.com/adfs/ls/IdpInitiatedSignOn.aspx?loginToRp=urn:amazon:webservices',
     [int]$SessionDuration = 28800,
     [switch]$Force = $false,
     [switch]$SetEnvVar = $false,
@@ -97,7 +97,7 @@ if ($ParameterSetName -eq 's1') {
         if ([string]::IsNullOrEmpty($UserName)) {
             $UserName = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).Identities.Name
         }
-        #$Credential = Get-Credential -UserName $UserName -Message "Enter the domain credentials:"
+        # $Credential = Get-Credential -UserName $UserName -Message "Enter the domain credentials:"
         $upn = (Read-Host -Prompt "Username [$UserName]")
         if (![string]::IsNullOrEmpty($upn)) { $UserName = $upn}
         $PasswordSecured = (Read-Host -Prompt "Password" -AsSecureString)
@@ -105,9 +105,9 @@ if ($ParameterSetName -eq 's1') {
         $Credential = [System.Management.Automation.PSCredential]::new($UserName, $PasswordSecured)
     }
 } elseif ($ParameterSetName -eq 's2') {
-        $UserName = $Credential.UserName
-        $PasswordSecured = $Credential.Password
-        $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
+    $UserName = $Credential.UserName
+    $PasswordSecured = $Credential.Password
+    $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
 }
 Write-Verbose "Using username: $($Username)"
 $WebRequestParams.Add('Body',@{UserName=$UserName;Password=$Password})
