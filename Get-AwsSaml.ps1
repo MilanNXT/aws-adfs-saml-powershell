@@ -4,6 +4,8 @@ Param(
     [string]$RoleArn = '',
     [string]$ProfileName = "saml",
     [string]$ProfileLocation = "$($HOME)\.aws\credentials",
+    [string]$DefaultRegion = 'eu-west-1',
+    [string]$DefaultOutput = 'json',
     [string]$IdpEndpoint = 'https://sts.contoso.com/adfs/ls/IdpInitiatedSignOn.aspx?loginToRp=urn:amazon:webservices',
     [int]$SessionDuration = 28800,
     [switch]$Force = $false,
@@ -11,6 +13,7 @@ Param(
     [switch]$SetSharedCred = $true,
     [switch]$StoreAsDefaultProfile = $False,
     [switch]$CheckAndInstallModules = $False,
+    [switch]$AwsCliPreferred = $False,
     [Parameter (ParameterSetName = 's1', Mandatory = $false)][string]$UserName = '',
     [Parameter (ParameterSetName = 's1', Mandatory = $false)][string]$Password = '',
     [Parameter (ParameterSetName = 's2', Mandatory = $false)][System.Management.Automation.PSCredential]$Credential
@@ -21,6 +24,8 @@ Param(
 Write-Verbose "Using following paramter values"
 Write-Verbose ">> ProfileName: [$ProfileName]"
 Write-Verbose ">> ProfileLocation: [$ProfileLocation]"
+Write-Verbose ">> Default Region: [$DefaultRegion]"
+Write-Verbose ">> Default Output: [$DefaultOutput]"
 Write-Verbose ">> IdpEndpoint: [$IdpEndpoint]"
 Write-Verbose ">> SessionDuration: [$SessionDuration]"
 Write-Verbose ">> Force SAML token refresh: [$Force]"
@@ -28,6 +33,7 @@ Write-Verbose ">> Set Enviroment Variables: [$SetEnvVar]"
 Write-Verbose ">> Set Shared Credentials: [$SetSharedCred]"
 Write-Verbose ">> Store as Default profile: [$StoreAsDefaultProfile]"
 Write-Verbose ">> Check and Install modules prerequisite: [$CheckAndInstallModules]"
+Write-Verbose ">> AWS Cli preferred: [$AwsCliPreferred]"
 if (![string]::IsNullOrEmpty($RoleArn)) {
     Write-Verbose "Pre-Selected role: [$RoleArn]"
 }
@@ -63,19 +69,48 @@ if ($CheckAndInstallModules) {
         Write-Verbose "AWSPowershell not found. Installing..."
         Install-Module AWSPowershell -Scope CurrentUser -Force -verbose:$false | Out-Null
     }
-} else { Write-Verbose -Message "Bypassing Nuget, Powershell and AWSPowershell prerequisite check..." }
+} else { 
+    Write-Verbose -Message "Bypassing Nuget, Powershell and AWSPowershell prerequisite check..." 
+}
 
-Write-Verbose -Message "Importing AWSPowershell comandlets..."
-Import-Module AWSPowerShell -Verbose:$false
+# check existence of AWSPowershell and AWS Cli
+$cli_awsps = $false
+$cli_aws = $false
+Write-Verbose -Message "Checking AWSPowershell and AWS Cli:"
+$ver_awsps = (Get-Module AWSPowershell -ListAvailable -verbose:$false | Sort Version -Descending | Select -First 1).Version.ToString()
+if (![string]::IsNullOrEmpty($ver_awsps)) {
+    $cli_awsps=$true
+    Write-Verbose -Message ">> found AWSPowershell ver: $ver_awsps"
+} else { Write-Verbose -Message ">> AWSPowershell not installed..." }
+if (Get-Command "aws" -ErrorAction SilentlyContinue){
+    $ver_awscli = (&aws --version)
+    $cli_aws =$true
+    Write-Verbose -Message ">> found AWS Cli ver: $ver_awscli"
+} else { Write-Verbose -Message ">> AWS Cli not installed..." }
+if (-not($cli_awsps -and $cli_aws)) {
+    Write-Verbose -Message "Nor AWS CLi nor AWS Powershell avilable. Exiting..."
+    exit 1
+}
+if ($AwsCliPreferred -and $cli_aws) { $cli_awsps = $false }
+
+if ($cli_awsps) {
+    Write-Verbose -Message ">> using AWSPowershell..."
+    Write-Verbose -Message "Importing AWSPowershell comandlets..."
+    Import-Module AWSPowerShell -Verbose:$false
+} else {    Write-Verbose -Message ">> using Aws Cli..."}
 
 if (!$force) {
     try {
-        Get-S3Bucket -ProfileName $ProfileName | Out-Null
-        Write-Verbose "Valid credential are still available. No need to refresh. Use -Force to force resfresh"
+        if ($cli_awsps) { Get-S3Bucket -ProfileName $ProfileName | Out-Null }
+        elseif ($cli_aws) {
+            (&aws s3 ls --profile $profilename 2>&1) | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw $LASTEXITCODE }
+        }
+        Write-Verbose -Message "Valid credential are still available. No need to refresh. Use -Force to force resfresh"
         exit
     }
     catch {
-        Write-Verbose "Credentials expired, processing to refresh"
+        Write-Verbose -Message "Credentials expired, processing to refresh"
     }
 }
 
@@ -97,7 +132,7 @@ if ($ParameterSetName -eq 's1') {
         if ([string]::IsNullOrEmpty($UserName)) {
             $UserName = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).Identities.Name
         }
-        # $Credential = Get-Credential -UserName $UserName -Message "Enter the domain credentials:"
+        #$Credential = Get-Credential -UserName $UserName -Message "Enter the domain credentials:"
         $upn = (Read-Host -Prompt "Username [$UserName]")
         if (![string]::IsNullOrEmpty($upn)) { $UserName = $upn}
         $PasswordSecured = (Read-Host -Prompt "Password" -AsSecureString)
@@ -112,7 +147,14 @@ if ($ParameterSetName -eq 's1') {
 Write-Verbose "Using username: $($Username)"
 $WebRequestParams.Add('Body',@{UserName=$UserName;Password=$Password})
 $InitialResponse=Invoke-WebRequest @WebRequestParams -Credential $Credential -Verbose:$false
+$AuthMethod=$InitialResponse.InputFields.FindByName('AuthMethod').value
+$authContext=$InitialResponse.InputFields.FindByName('Context').value
 $SAMLResponseEncoded=$InitialResponse.InputFields.FindByName('SAMLResponse').value
+#Write-Verbose $InitialResponse
+if (![string]::IsNullOrEmpty($AuthMethod) -and ($AuthMethod -eq 'AzureMfaServerAuthentication')){
+    Write-Verbose "Authentication: $AuthMethod"
+    Write-Verbose "MFA authorization required..."
+}
 
 if (!$SAMLResponseEncoded) {
     Write-Verbose "No valid ADFS assertion received, please try again..."
@@ -135,6 +177,7 @@ foreach ($att in $SAMLResponse.Response.Assertion.AttributeStatement.Attribute) 
 Write-Verbose "Returned SAML assertion attributes:"
 Write-Verbose "SessionName: $RoleSessionNameAtt"
 Write-Verbose "SessionDuration: $SessionDurationAtt"
+$SessionDuration = $SessionDurationAtt
 
 if ([string]::IsNullOrEmpty($AwsRoles) -or ($AwsRoles.Count -le 0)) {
     Write-Verbose "No roles to assume has been returned, please try again..."
@@ -175,26 +218,61 @@ $PrincipalRole = $AwsRoles[[int]$SelectedRoleIndex].split(',')[0]
 Write-Verbose ">> Principal role: [$PrincipalRole]"
 Write-Verbose ">> Assuming role [$RoleArn]..."
 
-try {
-    if ($SessionDuration -gt 43200) {$SessionDuration=43200} # maximum alowed time 12 hours
-    $AssumedRole = Use-STSRoleWithSAML -SAMLAssertion $SAMLResponseEncoded -PrincipalArn $PrincipalRole -RoleArn $RoleArn -DurationInSeconds $SessionDuration -Verbose:$false
-    #$CliResult = (&aws sts assume-role-with-saml --role-arn $RoleArn --principal-arn $PrincipalRole --saml-assertion $SAMLResponseEncoded --duration-seconds 28800) | Out-String
-    #$AssumedRole = ConvertFrom-Json -InputObject $CliResult
-} catch {
+$stserr = ""
+$AssumedRole = $null
+if ($SessionDuration -gt 43200) {$SessionDuration=43200} # maximum alowed time 12 hours
+if ($cli_awsps) {
+    try {
+        $AssumedRole = Use-STSRoleWithSAML -SAMLAssertion $SAMLResponseEncoded -PrincipalArn $PrincipalRole -RoleArn $RoleArn -DurationInSeconds $SessionDuration -Verbose:$false -ErrorAction SilentlyContinue -ErrorVariable stserr
+    } catch { $stserr=$_ }
+    if (![string]::IsNullOrEmpty($stserr)) {
+        Write-Verbose -Message ">> downgrading SessionDuration to 28800..."
+        try {
+            $AssumedRole = Use-STSRoleWithSAML -SAMLAssertion $SAMLResponseEncoded -PrincipalArn $PrincipalRole -RoleArn $RoleArn -DurationInSeconds 28800 -Verbose:$false -ErrorAction SilentlyContinue -ErrorVariable stserr
+        } catch { $stserr=$_ }
+    }
+} elseif ($cli_aws) {
+    $AssumedRoleJson = &aws sts assume-role-with-saml --role-arn $RoleArn --principal-arn $PrincipalRole --saml-assertion $SAMLResponseEncoded --duration-seconds $SessionDuration 2>&1
+    if ($AssumedRoleJson | ?{$_.gettype().Name -eq "ErrorRecord"}) { 
+        Write-Verbose -Message ">> downgrading SessionDuration to 28800..."
+        $AssumedRoleJson = &aws sts assume-role-with-saml --role-arn $RoleArn --principal-arn $PrincipalRole --saml-assertion $SAMLResponseEncoded --duration-seconds 28800 2>&1
+        if ($AssumedRoleJson | ?{$_.gettype().Name -eq "ErrorRecord"}) { 
+            $stserr = $AssumedRoleJson | Out-String
+        } else { $AssumedRole = $AssumedRoleJson | ConvertFrom-Json }
+    } else { $AssumedRole = $AssumedRoleJson | ConvertFrom-Json }
+}
+if (![string]::IsNullOrEmpty($stserr)) {
     Write-Verbose "Unable to assume role [$RoleArn]..."
-    Write-Verbose $_
+    Write-Verbose -Message $stserr
     $AssumedRole = $null
     Write-Verbose "Token refresh failed, please try again..."
     if (!$VerbosePreference) { Write-Warning "Refresh failed, Use -Verbose parameter for more infomration" }
 }
 
 if (![string]::IsNullOrEmpty($AssumedRole)) {
+    Write-Verbose -Message ">> ...success"
     if ($SetSharedCred) {
         Write-Verbose "Storing assumed credential to [$ProfileLocation] as profile [$ProfileName]..."
-        Set-AWSCredential -AccessKey $AssumedRole.Credentials.AccessKeyId -SecretKey $AssumedRole.Credentials.SecretAccessKey -SessionToken $AssumedRole.Credentials.SessionToken -StoreAs $ProfileName -ProfileLocation $ProfileLocation
+        if ($cli_awsps) {
+            Set-AWSCredential -AccessKey $AssumedRole.Credentials.AccessKeyId -SecretKey $AssumedRole.Credentials.SecretAccessKey -SessionToken $AssumedRole.Credentials.SessionToken -StoreAs $ProfileName -ProfileLocation $ProfileLocation -Verbose:$false
+        } elseif ($cli_aws) {
+            &aws configure set region $DefaultRegion --profile $ProfileName
+            &aws configure set output $DefaultOutput --profile $ProfileName
+            &aws configure set aws_access_key_id $AssumedRole.Credentials.AccessKeyId --profile $ProfileName
+            &aws configure set aws_secret_access_key $AssumedRole.Credentials.SecretAccessKey --profile $ProfileName
+            &aws configure set aws_session_token $AssumedRole.Credentials.SessionToken --profile $ProfileName
+        }
         if ($StoreAsDefaultProfile) {
             Write-Verbose "Storing assumed credential to [$ProfileLocation] as Default profile..."
-            Set-AWSCredential -AccessKey $AssumedRole.Credentials.AccessKeyId -SecretKey $AssumedRole.Credentials.SecretAccessKey -SessionToken $AssumedRole.Credentials.SessionToken -StoreAs 'default' -ProfileLocation $ProfileLocation
+            if ($cli_awsps) {
+                Set-AWSCredential -AccessKey $AssumedRole.Credentials.AccessKeyId -SecretKey $AssumedRole.Credentials.SecretAccessKey -SessionToken $AssumedRole.Credentials.SessionToken -StoreAs 'default' -ProfileLocation $ProfileLocation
+            } elseif ($cli_aws) {
+                &aws configure set region $DefaultRegion 
+                &aws configure set output $DefaultOutput 
+                &aws configure set aws_access_key_id $AssumedRole.Credentials.AccessKeyId 
+                &aws configure set aws_secret_access_key $AssumedRole.Credentials.SecretAccessKey 
+                &aws configure set aws_session_token $AssumedRole.Credentials.SessionToken 
+            }
         }
     }
     if ($SetEnvVar) {
@@ -206,6 +284,15 @@ if (![string]::IsNullOrEmpty($AssumedRole)) {
         $env:AWS_ACCESS_KEY_ID=$AssumedRole.Credentials.AccessKeyId
         $env:AWS_SECRET_ACCESS_KEY=$AssumedRole.Credentials.SecretAccessKey
         $env:AWS_SESSION_TOKEN=$AssumedRole.Credentials.SessionToken
+    } else {
+        Write-Verbose  "Removing User Environment Variables [AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN]..."
+        [System.Environment]::SetEnvironmentVariable('AWS_ACCESS_KEY_ID',$null,[System.EnvironmentVariableTarget]::User)
+        [System.Environment]::SetEnvironmentVariable('AWS_SECRET_ACCESS_KEY',$null,[System.EnvironmentVariableTarget]::User)
+        [System.Environment]::SetEnvironmentVariable('AWS_SESSION_TOKEN',$null,[System.EnvironmentVariableTarget]::User)
+        Write-Verbose  "Removing CurrentSession Environment Variables [AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN]..."
+        $env:AWS_ACCESS_KEY_ID=$null
+        $env:AWS_SECRET_ACCESS_KEY=$null
+        $env:AWS_SESSION_TOKEN=$null
     }
     Write-Verbose "Done..."
 }
