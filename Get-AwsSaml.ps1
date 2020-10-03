@@ -87,7 +87,7 @@ if (Get-Command "aws" -ErrorAction SilentlyContinue){
     $cli_aws =$true
     Write-Verbose -Message ">> found AWS Cli ver: $ver_awscli"
 } else { Write-Verbose -Message ">> AWS Cli not installed..." }
-if (-not($cli_awsps -and $cli_aws)) {
+if (-not($cli_awsps -or $cli_aws)) {
     Write-Verbose -Message "Nor AWS CLi nor AWS Powershell avilable. Exiting..."
     exit 1
 }
