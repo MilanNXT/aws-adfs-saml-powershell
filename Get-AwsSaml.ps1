@@ -6,7 +6,7 @@ Param(
     [string]$ProfileLocation = "$($HOME)\.aws\credentials",
     [string]$DefaultRegion = 'eu-west-1',
     [string]$DefaultOutput = 'json',
-    [string]$IdpEndpoint = 'https://sts.contoso.com/adfs/ls/IdpInitiatedSignOn.aspx?loginToRp=urn:amazon:webservices',
+    [string]$IdpEndpoint = 'https://sts.contos.com/adfs/ls/IdpInitiatedSignOn.aspx?loginToRp=urn:amazon:webservices',
     [int]$SessionDuration = 28800,
     [switch]$Force = $false,
     [switch]$SetEnvVar = $false,
@@ -16,7 +16,8 @@ Param(
     [switch]$AwsCliPreferred = $False,
     [Parameter (ParameterSetName = 's1', Mandatory = $false)][string]$UserName = '',
     [Parameter (ParameterSetName = 's1', Mandatory = $false)][string]$Password = '',
-    [Parameter (ParameterSetName = 's2', Mandatory = $false)][System.Management.Automation.PSCredential]$Credential
+    [Parameter (ParameterSetName = 's2', Mandatory = $false)][System.Management.Automation.PSCredential]$Credential,
+    [Parameter (ParameterSetName = 's3', Mandatory = $false)][switch]$Sso = $False
 )
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -69,7 +70,7 @@ if ($CheckAndInstallModules) {
         Write-Verbose "AWSPowershell not found. Installing..."
         Install-Module AWSPowershell -Scope CurrentUser -Force -verbose:$false | Out-Null
     }
-} else { 
+} else {
     Write-Verbose -Message "Bypassing Nuget, Powershell and AWSPowershell prerequisite check..." 
 }
 
@@ -88,7 +89,7 @@ if (Get-Command "aws" -ErrorAction SilentlyContinue){
     Write-Verbose -Message ">> found AWS Cli ver: $ver_awscli"
 } else { Write-Verbose -Message ">> AWS Cli not installed..." }
 if (-not($cli_awsps -or $cli_aws)) {
-    Write-Verbose -Message "Nor AWS CLi nor AWS Powershell avilable. Exiting..."
+    Write-Verbose -Message "Nor AWS Cli nor AWS Powershell avilable. Exiting..."
     exit 1
 }
 if ($AwsCliPreferred -and $cli_aws) { $cli_awsps = $false }
@@ -114,45 +115,60 @@ if (!$force) {
     }
 }
 
-$WebRequestParams=@{ #Initialize parameters object
-    Uri = $IdpEndpoint
-    Method = 'POST'
-    ContentType = 'application/x-www-form-urlencoded'
-    SessionVariable = 'WebSession'
-    UseBasicParsing = $true
+$currentusername = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).Identities.Name
+if ($sso) {
+    $AuthMethod='SSO'
+    $UserName =$currentusername
+    $webRequestParams = @{
+        Method = 'POST'
+        Uri = $IdpEndpoint
+        UseDefaultCredentials = $true
+        UserAgent = 'Chrome' # UserAgent type has impact on ADFS authentication flow - in order to avoid user interaction we use 'Chrome'
+        UseBasicParsing = $true
+    }
+} else {
+    # set credentials for web request
+    $ParameterSetName = $PSCmdlet.ParameterSetName
+    if ([string]::IsNullOrEmpty($Credential)) {
+        $ParameterSetName = 's1'
+    }
+    if ($ParameterSetName -eq 's1') {
+        if ([string]::IsNullOrEmpty($UserName) -or [string]::IsNullOrEmpty($Password)) {
+            if ([string]::IsNullOrEmpty($UserName)) {
+                $UserName = $currentusername
+                $upn = (Read-Host -Prompt "Username [$UserName]")
+            }
+            if (![string]::IsNullOrEmpty($upn)) { $UserName = $upn }
+            $PasswordSecured = (Read-Host -Prompt "Password" -AsSecureString)
+            $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
+            $Credential = [System.Management.Automation.PSCredential]::new($UserName, $PasswordSecured)
+        }
+    } elseif ($ParameterSetName -eq 's2') {
+        $UserName = $Credential.UserName
+        $PasswordSecured = $Credential.Password
+        $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
+    }
+    $AuthMethod='BasicAuthentication'
+    $WebRequestParams=@{
+        Uri = $IdpEndpoint
+        Method = 'POST'
+        ContentType = 'application/x-www-form-urlencoded'
+        SessionVariable = 'WebSession'
+        UseBasicParsing = $true
+        Body = @{ UserName=$UserName; Password=$Password }
+        Credential = $Credential
+    }
 }
 
-# set credentials for web request
-$ParameterSetName = $PSCmdlet.ParameterSetName
-if ([string]::IsNullOrEmpty($Credential)) {
-    $ParameterSetName = 's1'
-}
-if ($ParameterSetName -eq 's1') {
-    if ([string]::IsNullOrEmpty($UserName) -or [string]::IsNullOrEmpty($Password)) {
-        if ([string]::IsNullOrEmpty($UserName)) {
-            $UserName = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).Identities.Name
-        }
-        #$Credential = Get-Credential -UserName $UserName -Message "Enter the domain credentials:"
-        $upn = (Read-Host -Prompt "Username [$UserName]")
-        if (![string]::IsNullOrEmpty($upn)) { $UserName = $upn}
-        $PasswordSecured = (Read-Host -Prompt "Password" -AsSecureString)
-        $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
-        $Credential = [System.Management.Automation.PSCredential]::new($UserName, $PasswordSecured)
-    }
-} elseif ($ParameterSetName -eq 's2') {
-    $UserName = $Credential.UserName
-    $PasswordSecured = $Credential.Password
-    $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PasswordSecured))
-}
 Write-Verbose "Using username: $($Username)"
-$WebRequestParams.Add('Body',@{UserName=$UserName;Password=$Password})
-$InitialResponse=Invoke-WebRequest @WebRequestParams -Credential $Credential -Verbose:$false
+Write-Verbose "Selected authentication: $AuthMethod"
+$InitialResponse=Invoke-WebRequest @WebRequestParams -Verbose:$false
 $AuthMethod=$InitialResponse.InputFields.FindByName('AuthMethod').value
 $authContext=$InitialResponse.InputFields.FindByName('Context').value
 $SAMLResponseEncoded=$InitialResponse.InputFields.FindByName('SAMLResponse').value
+Write-Verbose "Returned Authentication: $AuthMethod"
 #Write-Verbose $InitialResponse
 if (![string]::IsNullOrEmpty($AuthMethod) -and ($AuthMethod -eq 'AzureMfaServerAuthentication')){
-    Write-Verbose "Authentication: $AuthMethod"
     Write-Verbose "MFA authorization required..."
 }
 
@@ -226,6 +242,7 @@ if ($cli_awsps) {
         $AssumedRole = Use-STSRoleWithSAML -SAMLAssertion $SAMLResponseEncoded -PrincipalArn $PrincipalRole -RoleArn $RoleArn -DurationInSeconds $SessionDuration -Verbose:$false -ErrorAction SilentlyContinue -ErrorVariable stserr
     } catch { $stserr=$_ }
     if (![string]::IsNullOrEmpty($stserr)) {
+        Write-Verbose -Message ">> Assume failed with SessionDuration: [$SessionDuration]"
         Write-Verbose -Message ">> downgrading SessionDuration to 28800..."
         try {
             $AssumedRole = Use-STSRoleWithSAML -SAMLAssertion $SAMLResponseEncoded -PrincipalArn $PrincipalRole -RoleArn $RoleArn -DurationInSeconds 28800 -Verbose:$false -ErrorAction SilentlyContinue -ErrorVariable stserr
