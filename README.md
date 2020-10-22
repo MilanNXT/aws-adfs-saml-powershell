@@ -11,7 +11,7 @@ Update AWS session token and store it to shared credential file or environment v
 ## SYNTAX
 ``` powershell
 
-    Get-AwsSaml [-RoleArn <string>] [-ProfileName <string>] [-ProfileLocation <string>] [-IdpEndpoint <string>] [-SetEnvVar] [-SetSharedCred] [ [UserName <string>] [Password <string>] | [Credentials <PSCredential>] ] [-Verbose]
+    Get-AwsSaml [-RoleArn <string>] [-ProfileName <string>] [-ProfileLocation <string>] [-IdpEndpoint <string>] [-SetEnvVar] [-SetSharedCred] [ [UserName <string>] [Password <string>] | [Credentials <PSCredential>] | [-Sso] ] [-Verbose]
 
 ```
 
@@ -35,6 +35,9 @@ Update AWS session token and store it to shared credential file or environment v
 
 * #### SetSharedCred
     * Store AWS session credentials in shared credential file. Default value ___'true'___
+
+* #### Sso
+    * use single sign-on
 
 * #### UserName
     * Username to use to logon. If not provided current session username retrived.
